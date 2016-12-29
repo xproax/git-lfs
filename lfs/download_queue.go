@@ -7,7 +7,7 @@ import (
 
 // NewDownloadCheckQueue builds a checking queue, checks that objects are there but doesn't download
 func NewDownloadCheckQueue(cfg *config.Configuration, options ...tq.Option) *tq.TransferQueue {
-	allOptions := make([]tq.Option, len(options), len(options)+1)
+	allOptions := make([]tq.Option, 0, len(options)+1)
 	allOptions = append(allOptions, options...)
 	allOptions = append(allOptions, tq.DryRun(true))
 	return NewDownloadQueue(cfg, allOptions...)
