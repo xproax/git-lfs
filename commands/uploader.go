@@ -5,6 +5,7 @@ import (
 
 	"github.com/git-lfs/git-lfs/errors"
 	"github.com/git-lfs/git-lfs/lfs"
+	"github.com/git-lfs/git-lfs/progress"
 	"github.com/git-lfs/git-lfs/tools"
 	"github.com/git-lfs/git-lfs/tq"
 )
@@ -14,13 +15,21 @@ var uploadMissingErr = "%s does not exist in .git/lfs/objects. Tried %s, which m
 type uploadContext struct {
 	DryRun       bool
 	uploadedOids tools.StringSet
+
+	meter progress.Meter
+	tq    *tq.TransferQueue
 }
 
 func newUploadContext(dryRun bool) *uploadContext {
-	return &uploadContext{
+	ctx := &uploadContext{
 		DryRun:       dryRun,
 		uploadedOids: tools.NewStringSet(),
 	}
+
+	ctx.meter = buildProgressMeter(ctx.DryRun)
+	ctx.tq = newUploadQueue(tq.WithProgress(ctx.meter), tq.DryRun(ctx.DryRun))
+
+	return ctx
 }
 
 // AddUpload adds the given oid to the set of oids that have been uploaded in
@@ -40,7 +49,6 @@ func (c *uploadContext) prepareUpload(unfiltered []*lfs.WrappedPointer) (*tq.Tra
 	uploadables := make([]*lfs.WrappedPointer, 0, numUnfiltered)
 	missingLocalObjects := make([]*lfs.WrappedPointer, 0, numUnfiltered)
 	missingSize := int64(0)
-	meter := buildProgressMeter(c.DryRun)
 
 	// XXX(taylor): temporary measure to fix duplicate (broken) results from
 	// scanner
@@ -58,7 +66,7 @@ func (c *uploadContext) prepareUpload(unfiltered []*lfs.WrappedPointer) (*tq.Tra
 
 		// estimate in meter early (even if it's not going into uploadables), since
 		// we will call Skip() based on the results of the download check queue.
-		meter.Add(p.Size)
+		c.meter.Add(p.Size)
 
 		if lfs.ObjectExistsOfSize(p.Oid, p.Size) {
 			uploadables = append(uploadables, p)
@@ -73,21 +81,20 @@ func (c *uploadContext) prepareUpload(unfiltered []*lfs.WrappedPointer) (*tq.Tra
 	// check to see if the server has the missing objects.
 	c.checkMissing(missingLocalObjects, missingSize)
 
-	// build the TransferQueue, automatically skipping any missing objects that
-	// the server already has.
-	uploadQueue := newUploadQueue(tq.WithProgress(meter), tq.DryRun(c.DryRun))
+	// use the context's TransferQueue, automatically skipping any missing
+	// objects that the server already has.
 	for _, p := range missingLocalObjects {
 		if c.HasUploaded(p.Oid) {
 			// if the server already has this object, call Skip() on
 			// the progressmeter to decrement the number of files by
 			// 1 and the number of bytes by `p.Size`.
-			uploadQueue.Skip(p.Size)
+			c.tq.Skip(p.Size)
 		} else {
 			uploadables = append(uploadables, p)
 		}
 	}
 
-	return uploadQueue, uploadables
+	return c.tq, uploadables
 }
 
 // This checks the given slice of pointers that don't exist in .git/lfs/objects
@@ -152,14 +159,16 @@ func uploadPointers(c *uploadContext, unfiltered []*lfs.WrappedPointer) {
 		q.Add(t.Name, t.Path, t.Oid, t.Size)
 		c.SetUploaded(p.Oid)
 	}
+}
 
-	q.Wait()
+func (c *uploadContext) Await() {
+	c.tq.Wait()
 
-	for _, err := range q.Errors() {
+	for _, err := range c.tq.Errors() {
 		FullError(err)
 	}
 
-	if len(q.Errors()) > 0 {
+	if len(c.tq.Errors()) > 0 {
 		os.Exit(2)
 	}
 }
