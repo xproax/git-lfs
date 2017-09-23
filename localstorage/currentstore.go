@@ -1,12 +1,12 @@
 package localstorage
 
 import (
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 
 	"github.com/github/git-lfs/config"
-	"github.com/github/git-lfs/errors"
 )
 
 const (
@@ -25,7 +25,8 @@ func Objects() *LocalStorage {
 	return objects
 }
 
-func ResolveDirs() error {
+func ResolveDirs() {
+
 	config.ResolveGitBasicDirs()
 	TempDir = filepath.Join(config.LocalGitDir, "lfs", "tmp") // temp files per worktree
 
@@ -35,15 +36,14 @@ func ResolveDirs() error {
 	)
 
 	if err != nil {
-		return errors.Wrap(err, "localstorage")
+		panic(fmt.Sprintf("Error trying to init LocalStorage: %s", err))
 	}
 
 	objects = objs
 	config.LocalLogDir = filepath.Join(objs.RootDir, "logs")
 	if err := os.MkdirAll(config.LocalLogDir, localLogDirPerms); err != nil {
-		return errors.Wrap(err, "localstorage")
+		panic(fmt.Errorf("Error trying to create log directory in '%s': %s", config.LocalLogDir, err))
 	}
-	return nil
 }
 
 func TempFile(prefix string) (*os.File, error) {
